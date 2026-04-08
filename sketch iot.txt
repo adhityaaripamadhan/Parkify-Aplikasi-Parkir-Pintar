@@ -1,0 +1,295 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <SPI.h>
+#include <MFRC522.h>
+#include <ESP32Servo.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// WIFI
+const char* ssid = "";
+const char* password = "";
+
+// MQTT
+const char* mqtt_server = "broker.hivemq.com";
+const char* prefix = "parking/adhitya";
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// OLED
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_ADDR 0x3C
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// RFID
+#define SS_ENTRY 5
+#define RST_ENTRY 27
+
+#define SS_EXIT 15
+#define RST_EXIT 17
+
+MFRC522 rfidEntry(SS_ENTRY, RST_ENTRY);
+MFRC522 rfidExit(SS_EXIT, RST_EXIT);
+
+// SERVO 
+#define SERVO_ENTRY 32
+#define SERVO_EXIT 33
+
+Servo servoEntry;
+Servo servoExit;
+
+// TOPIC
+String topic_rfid_entry;
+String topic_rfid_exit;
+String topic_lcd;
+String topic_servo_entry;
+String topic_servo_exit;
+
+// ANTI DOUBLE
+String lastUIDEntry = "";
+unsigned long lastTimeEntry = 0;
+
+String lastUIDExit = "";
+unsigned long lastTimeExit = 0;
+
+// LCD STATE
+String lcdState = "DEFAULT";
+unsigned long lcdTimer = 0;
+
+// OLED 
+void showOLED(String t1, String t2) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+
+  display.setCursor(0, 10);
+  display.println(t1);
+
+  display.setCursor(0, 35);
+  display.println(t2);
+
+  display.display();
+}
+
+// WIFI
+void connectWiFi() {
+  WiFi.disconnect(true);
+  delay(500);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  Serial.print("Connecting WiFi");
+
+  int timeout = 0;
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+    timeout++;
+
+    if (timeout > 20) ESP.restart();
+  }
+
+  Serial.println("\nWiFi Connected!");
+}
+
+// MQTT CALLBACK
+void callback(char* topic, byte* payload, unsigned int length) {
+
+  String msg = "";
+  for (int i = 0; i < length; i++) msg += (char)payload[i];
+
+  String t = String(topic);
+  Serial.println("MQTT [" + t + "] : " + msg);
+
+  // LCD
+  if (t == topic_lcd) {
+
+    if (msg == "DEFAULT") {
+      lcdState = "DEFAULT";
+      return;
+    }
+
+    int sep = msg.indexOf('|');
+
+    if (sep != -1)
+      showOLED(msg.substring(0, sep), msg.substring(sep + 1));
+    else
+      showOLED(msg, "");
+
+    if (msg.startsWith("Selamat Datang")) {
+      lcdState = "ENTRY_SUCCESS";
+      lcdTimer = millis();
+    }
+    else if (msg.startsWith("Total")) {
+      lcdState = "EXIT_WAIT";
+    }
+    else if (msg.startsWith("Terima Kasih")) {
+      lcdState = "EXIT_DONE";
+      lcdTimer = millis();
+    }
+  }
+
+  // SERVO ENTRY
+  if (t == topic_servo_entry && msg == "OPEN") {
+    servoEntry.write(0);
+    delay(2000);
+    servoEntry.write(90);
+  }
+
+  // SERVO EXIT
+  if (t == topic_servo_exit && msg == "OPEN") {
+
+    servoExit.write(0);
+
+    showOLED("Terima Kasih", "Selamat Jalan");
+
+    lcdState = "EXIT_DONE";
+    lcdTimer = millis();
+
+    delay(2000);
+    servoExit.write(90);
+  }
+}
+
+// MQTT 
+void reconnectMQTT() {
+  while (!client.connected()) {
+
+    String clientId = "ESP32-" + String(random(1000));
+
+    if (client.connect(clientId.c_str())) {
+
+      client.subscribe(topic_lcd.c_str());
+      client.subscribe(topic_servo_entry.c_str());
+      client.subscribe(topic_servo_exit.c_str());
+
+    } else {
+      delay(2000);
+    }
+  }
+}
+
+// RFID 
+String readRFID(MFRC522 &rfid) {
+  String uid = "";
+
+  for (byte i = 0; i < rfid.uid.size; i++) {
+    if (rfid.uid.uidByte[i] < 0x10) uid += "0";
+    uid += String(rfid.uid.uidByte[i], HEX);
+  }
+
+  uid.toUpperCase();
+  return uid;
+}
+
+// SETUP
+void setup() {
+
+  Serial.begin(115200);
+
+  connectWiFi();
+
+  SPI.begin(18, 19, 23);
+
+  pinMode(SS_ENTRY, OUTPUT);
+  pinMode(SS_EXIT, OUTPUT);
+
+  digitalWrite(SS_ENTRY, HIGH);
+  digitalWrite(SS_EXIT, HIGH);
+
+  rfidEntry.PCD_Init();
+  rfidExit.PCD_Init();
+
+  Wire.begin(21, 22);
+  display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
+
+  // DEFAULT LCD
+  showOLED("Silahkan", "Tempelkan Kartu");
+
+  servoEntry.attach(SERVO_ENTRY);
+  servoExit.attach(SERVO_EXIT);
+
+  servoEntry.write(90);
+  servoExit.write(90);
+
+  client.setServer(mqtt_server, 1883);
+  client.setCallback(callback);
+
+  topic_rfid_entry = String(prefix) + "/rfid/entry";
+  topic_rfid_exit  = String(prefix) + "/rfid/exit";
+  topic_lcd        = String(prefix) + "/lcd";
+  topic_servo_entry= String(prefix) + "/entry/servo";
+  topic_servo_exit = String(prefix) + "/exit/servo";
+}
+
+// LOOP
+void loop() {
+
+  if (WiFi.status() != WL_CONNECTED) connectWiFi();
+  if (!client.connected()) reconnectMQTT();
+
+  client.loop();
+
+  // ===== AUTO RESET LCD =====
+  if (lcdState == "ENTRY_SUCCESS" && millis() - lcdTimer > 3000) {
+    showOLED("Silahkan", "Tempelkan Kartu");
+    lcdState = "DEFAULT";
+  }
+
+  if (lcdState == "EXIT_DONE" && millis() - lcdTimer > 3000) {
+    showOLED("Silahkan", "Tempelkan Kartu");
+    lcdState = "DEFAULT";
+  }
+
+  delay(100);
+
+  // ENTRY
+  digitalWrite(SS_EXIT, HIGH);
+  digitalWrite(SS_ENTRY, LOW);
+
+  if (rfidEntry.PICC_IsNewCardPresent() && rfidEntry.PICC_ReadCardSerial()) {
+
+    String uid = readRFID(rfidEntry);
+
+    if (uid == lastUIDEntry && millis() - lastTimeEntry < 3000) {
+      rfidEntry.PICC_HaltA();
+      return;
+    }
+
+    lastUIDEntry = uid;
+    lastTimeEntry = millis();
+
+    client.publish(topic_rfid_entry.c_str(), uid.c_str());
+
+    showOLED("MASUK", uid);
+
+    rfidEntry.PICC_HaltA();
+  }
+
+  // EXIT
+  digitalWrite(SS_ENTRY, HIGH);
+  digitalWrite(SS_EXIT, LOW);
+
+  if (rfidExit.PICC_IsNewCardPresent() && rfidExit.PICC_ReadCardSerial()) {
+
+    String uid = readRFID(rfidExit);
+
+    if (uid == lastUIDExit && millis() - lastTimeExit < 3000) {
+      rfidExit.PICC_HaltA();
+      return;
+    }
+
+    lastUIDExit = uid;
+    lastTimeExit = millis();
+
+    client.publish(topic_rfid_exit.c_str(), uid.c_str());
+
+    showOLED("KELUAR", uid);
+
+    rfidExit.PICC_HaltA();
+  }
+}

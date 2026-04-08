@@ -1,0 +1,2 @@
+cd C:\xampp\htdocs\parkir-app\mqtt
+php mqtt_listener.php
