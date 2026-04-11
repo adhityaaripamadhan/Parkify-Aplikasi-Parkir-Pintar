@@ -1,19 +1,17 @@
 <?php
 
 return [
-    'broker' => 'broker.hivemq.com',
-    'port' => 1883,
-    'client_id' => 'parkir-server-' . uniqid(),
+    'broker' => 'broker.hivemq.com', //alamat broker mqtt
+    'port' => 1883, // port standar mqtt
+    'client_id' => 'parkir-server-' . uniqid(), // id unik client
     'clean_session' => true,
 
-    'prefix' => 'parking/adhitya',
+    'prefix' => 'parking/adhitya', // prefix untuk semua topik
 
-    // ✅ 2 RFID
-    'topic_rfid_entry' => 'rfid/entry',
-    'topic_rfid_exit'  => 'rfid/exit',
+    'topic_rfid_entry' => 'rfid/entry', // topik menerima data rfid saat kendaraan masuk
+    'topic_rfid_exit'  => 'rfid/exit', // topik menerima data rfid saat kendaraan keluar
 
-    // OUTPUT
-    'topic_lcd' => 'lcd',
-    'topic_entry_servo' => 'entry/servo',
-    'topic_exit_servo' => 'exit/servo',
+    'topic_lcd' => 'lcd', // topik kirim pesan ke lcd 
+    'topic_entry_servo' => 'entry/servo', // topik kontrol servo pintu masuk 
+    'topic_exit_servo' => 'exit/servo', // topik kontrol servo pintu masuk 
 ];
